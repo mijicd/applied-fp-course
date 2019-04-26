@@ -20,12 +20,14 @@ import           Network.HTTP.Types                 (Status, hContentType,
 
 import qualified Data.ByteString.Lazy.Char8         as LBS
 
+import           Data.Bifunctor
 import           Data.Either                        (Either (Left, Right),
                                                      either)
 
 import           Data.Semigroup                     ((<>))
 import           Data.Text                          (Text)
 import           Data.Text.Encoding                 (decodeUtf8)
+import qualified Data.Text.Lazy                     as L
 import           Data.Text.Lazy.Encoding            (encodeUtf8)
 
 import           Database.SQLite.SimpleErrors.Types (SQLiteResponse)
@@ -33,11 +35,13 @@ import           Database.SQLite.SimpleErrors.Types (SQLiteResponse)
 import           Waargonaut.Encode                  (Encoder')
 import qualified Waargonaut.Encode                  as E
 
-import           Level04.Conf                       (Conf, firstAppConfig)
+import           Level04.Conf                       (Conf, dbFilePath, firstAppConfig)
 import qualified Level04.DB                         as DB
 import           Level04.Types                      (ContentType (JSON, PlainText),
-                                                     Error (EmptyCommentText, EmptyTopic, UnknownRoute),
+                                                     Error (..),
                                                      RqType (AddRq, ListRq, ViewRq),
+                                                     encodeComment, 
+                                                     encodeTopic,
                                                      mkCommentText, mkTopic,
                                                      renderContentType)
 
@@ -49,7 +53,9 @@ data StartUpError
   deriving Show
 
 runApp :: IO ()
-runApp = error "runApp needs re-implementing"
+runApp = do
+  startup <- prepareAppReqs
+  either (putStrLn . show) (\db -> run 8180 $ app db) startup
 
 -- We need to complete the following steps to prepare our app requirements:
 --
@@ -60,8 +66,9 @@ runApp = error "runApp needs re-implementing"
 --
 prepareAppReqs
   :: IO ( Either StartUpError DB.FirstAppDB )
-prepareAppReqs =
-  error "prepareAppReqs not implemented"
+prepareAppReqs = do
+  db <- DB.initDB $ dbFilePath firstAppConfig
+  pure $ first DBInitErr db
 
 -- | Some helper functions to make our lives a little more DRY.
 mkResponse
@@ -138,12 +145,16 @@ handleRequest
   :: DB.FirstAppDB
   -> RqType
   -> IO (Either Error Response)
-handleRequest _db (AddRq _ _) =
-  (resp200 PlainText "Success" <$) <$> error "AddRq handler not implemented"
-handleRequest _db (ViewRq _)  =
-  error "ViewRq handler not implemented"
-handleRequest _db ListRq      =
-  error "ListRq handler not implemented"
+handleRequest db (AddRq topic comment) =
+  (resp200 PlainText "Success" <$) <$> DB.addCommentToTopic db topic comment
+
+handleRequest db (ViewRq topic) = do
+  result <- DB.getComments db topic
+  pure $ second (resp200Json $ E.list encodeComment) result
+
+handleRequest db ListRq = do
+  result <- DB.getTopics db
+  pure $ second (resp200Json $ E.list encodeTopic) result
 
 mkRequest
   :: Request
@@ -163,9 +174,8 @@ mkAddRequest
   :: Text
   -> LBS.ByteString
   -> Either Error RqType
-mkAddRequest ti c = AddRq
-  <$> mkTopic ti
-  <*> (mkCommentText . decodeUtf8 . LBS.toStrict) c
+mkAddRequest ti c = 
+  AddRq <$> mkTopic ti <*> (mkCommentText . decodeUtf8 . LBS.toStrict) c
 
 mkViewRequest
   :: Text
@@ -181,9 +191,8 @@ mkListRequest =
 mkErrorResponse
   :: Error
   -> Response
-mkErrorResponse UnknownRoute =
-  resp404 PlainText "Unknown Route"
-mkErrorResponse EmptyCommentText =
-  resp400 PlainText "Empty Comment"
-mkErrorResponse EmptyTopic =
-  resp400 PlainText "Empty Topic"
+mkErrorResponse UnknownRoute = resp404 PlainText "Unknown Route"
+mkErrorResponse EmptyCommentText = resp400 PlainText "Empty Comment"
+mkErrorResponse EmptyTopic = resp400 PlainText "Empty Topic"
+mkErrorResponse (DBError text) = resp400 PlainText $ (encodeUtf8 . L.fromStrict) text
+

@@ -10,6 +10,11 @@ module Level04.DB
   , deleteTopic
   ) where
 
+import           Control.Exception                  (try)
+import           Control.Monad                      (forM)
+
+import           Data.Bifunctor
+import           Data.Functor
 import           Data.Text                          (Text)
 import qualified Data.Text                          as Text
 
@@ -21,8 +26,8 @@ import qualified Database.SQLite.Simple             as Sql
 import qualified Database.SQLite.SimpleErrors       as Sql
 import           Database.SQLite.SimpleErrors.Types (SQLiteResponse)
 
-import           Level04.Types                      (Comment, CommentText,
-                                                     Error, Topic)
+import           Level04.Types
+import           Level04.DB.Types
 
 -- ------------------------------------------------------------------------|
 -- You'll need the documentation for sqlite-simple ready for this section! |
@@ -40,25 +45,24 @@ data FirstAppDB = FirstAppDB
   }
 
 -- Quick helper to pull the connection and close it down.
-closeDB
-  :: FirstAppDB
-  -> IO ()
-closeDB =
-  error "closeDB not implemented"
+closeDB :: FirstAppDB -> IO ()
+closeDB db = Sql.close $ dbConn db
 
 -- Given a `FilePath` to our SQLite DB file, initialise the database and ensure
 -- our Table is there by running a query to create it, if it doesn't exist
 -- already.
 initDB
   :: FilePath
-  -> IO ( Either SQLiteResponse FirstAppDB )
-initDB fp =
-  error "initDB not implemented"
+  -> IO (Either SQLiteResponse FirstAppDB)
+initDB fp = do
+  conn <- Sql.open fp
+  e    <- try $ Sql.execute_ conn q
+  pure $ e $> FirstAppDB conn
   where
   -- Query has an `IsString` instance so string literals like this can be
   -- converted into a `Query` type when the `OverloadedStrings` language
   -- extension is enabled.
-    createTableQ = "CREATE TABLE IF NOT EXISTS comments (id INTEGER PRIMARY KEY, topic TEXT, comment TEXT, time TEXT)"
+    q = "CREATE TABLE IF NOT EXISTS comments (id INTEGER PRIMARY KEY AUTOINCREMENT, topic TEXT, comment TEXT, time TEXT)"
 
 -- Note that we don't store the `Comment` in the DB, it is the type we build
 -- to send to the outside world. We will be loading our `DBComment` type from
@@ -70,46 +74,65 @@ initDB fp =
 --
 -- HINT: You can use '?' or named place-holders as query parameters. Have a look
 -- at the section on parameter substitution in sqlite-simple's documentation.
+-- There are several possible implementations of this function. Particularly
+-- there may be a trade-off between deciding to throw an Error if a DBComment
+-- cannot be converted to a Comment, or simply ignoring any DBComment that is
+-- not valid.
 getComments
   :: FirstAppDB
   -> Topic
   -> IO (Either Error [Comment])
-getComments =
-  let
-    sql = "SELECT id,topic,comment,time FROM comments WHERE topic = ?"
-  -- There are several possible implementations of this function. Particularly
-  -- there may be a trade-off between deciding to throw an Error if a DBComment
-  -- cannot be converted to a Comment, or simply ignoring any DBComment that is
-  -- not valid.
-  in
-    error "getComments not implemented"
+getComments app topic = do
+  res <- try $ Sql.query conn q [t] :: IO (Either SQLiteResponse [DBComment])
 
+  case res of
+    Right dcs -> (pure . sequence) $ fromDBComment <$> dcs
+    _         -> (pure . Left . DBError) "Failed to load comments."
+
+  where
+    conn = dbConn app
+    q    = "SELECT id, topic, comment, time FROM comments WHERE topic = ?"
+    t    = getTopic topic
+    
 addCommentToTopic
   :: FirstAppDB
   -> Topic
   -> CommentText
   -> IO (Either Error ())
-addCommentToTopic =
-  let
-    sql = "INSERT INTO comments (topic,comment,time) VALUES (?,?,?)"
-  in
-    error "addCommentToTopic not implemented"
+addCommentToTopic app topic text = do
+  now <- getCurrentTime
+  res <- try $ Sql.execute conn q (t, ct, now) :: IO (Either SQLiteResponse ())
+
+  pure $ first (\_ -> DBError "Failed to add comment.") res
+
+  where
+    conn = dbConn app 
+    t    = getTopic topic
+    ct   = getCommentText text
+    q    = "INSERT INTO comments (topic, comment, time) VALUES (?, ?, ?)"
 
 getTopics
   :: FirstAppDB
   -> IO (Either Error [Topic])
-getTopics =
-  let
-    sql = "SELECT DISTINCT topic FROM comments"
-  in
-    error "getTopics not implemented"
+getTopics app = do
+  res <- try $ Sql.query_ conn q :: IO (Either SQLiteResponse [DBTopic])
+
+  case res of
+    Right dts -> (pure . sequence) $ fromDBTopic <$> dts
+    _         -> (pure . Left . DBError) "Failed to load topics."
+
+  where
+    conn = dbConn app
+    q    = "SELECT DISTINCT topic FROM comments"
 
 deleteTopic
   :: FirstAppDB
   -> Topic
   -> IO (Either Error ())
-deleteTopic =
-  let
-    sql = "DELETE FROM comments WHERE topic = ?"
-  in
-    error "deleteTopic not implemented"
+deleteTopic app topic = do
+  res <- try $ Sql.execute conn q [t] :: IO (Either SQLiteResponse ())
+  pure $ first (\_ -> DBError "Failed to remove topic.") res
+  where
+    conn = dbConn app
+    t    = getTopic topic
+    q    = "DELETE FROM comments WHERE topic = ?"

@@ -64,6 +64,7 @@ library
                          , Level04.DB.Types
                          , Level04.Core
                          , Level04.Types
+                         , Level04.Types.CommentId
                          , Level04.Types.CommentText
                          , Level04.Types.Error
                          , Level04.Types.Topic
