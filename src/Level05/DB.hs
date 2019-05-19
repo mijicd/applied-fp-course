@@ -26,11 +26,12 @@ import           Database.SQLite.SimpleErrors.Types (SQLiteResponse)
 
 import           Level05.Types                      (Comment, CommentText,
                                                      Error (DBError), Topic,
-                                                     fromDBComment,
+                                                     fromDBComment, fromDBTopic,
                                                      getCommentText, getTopic,
                                                      mkTopic)
 
-import           Level05.AppM                       (AppM)
+import           Level05.DB.Types
+import           Level05.AppM                       (AppM(..), liftEither)
 
 -- We have a data type to simplify passing around the information we need to run
 -- our database queries. This also allows things to change over time without
@@ -40,69 +41,85 @@ newtype FirstAppDB = FirstAppDB
   { dbConn  :: Connection
   }
 
--- Quick helper to pull the connection and close it down.
-closeDB
-  :: FirstAppDB
-  -> IO ()
-closeDB =
-  Sql.close . dbConn
-
-initDB
-  :: FilePath
-  -> IO ( Either SQLiteResponse FirstAppDB )
-initDB fp = Sql.runDBAction $ do
-  -- Initialise the connection to the DB...
-  -- - What could go wrong here?
-  -- - What haven't we be told in the types?
-  con <- Sql.open fp
-  -- Initialise our one table, if it's not there already
-  _ <- Sql.execute_ con createTableQ
-  pure $ FirstAppDB con
-  where
-  -- Query has an `IsString` instance so string literals like this can be
-  -- converted into a `Query` type when the `OverloadedStrings` language
-  -- extension is enabled.
-    createTableQ =
-      "CREATE TABLE IF NOT EXISTS comments (id INTEGER PRIMARY KEY, topic TEXT, comment TEXT, time INTEGER)"
-
 runDB
   :: (a -> Either Error b)
   -> IO a
   -> AppM b
-runDB =
-  -- This function is intended to abstract away the running of DB functions and
-  -- the catching of any errors. As well as the process of running some
-  -- processing function over those results.
-  error "Write 'runDB' to match the type signature"
-  -- Move your use of DB.runDBAction to this function to avoid repeating
-  -- yourself in the various DB functions.
+runDB f io = 
+  AppM $ (\res -> (first DBError res) >>= f) <$> Sql.runDBAction io
+
+-- Quick helper to pull the connection and close it down.
+closeDB
+  :: FirstAppDB
+  -> AppM ()
+closeDB app =
+  let
+    io = (Sql.close . dbConn) app
+  in
+    runDB pure io
+
+initDB
+  :: FilePath 
+  -> AppM FirstAppDB
+initDB fp =
+  let
+    query = "CREATE TABLE IF NOT EXISTS comments (id INTEGER PRIMARY KEY, topic TEXT, comment TEXT, time INTEGER)"
+    io = do
+      conn <- Sql.open fp
+      _    <- Sql.execute_ conn query
+      pure $ FirstAppDB conn
+  in
+    runDB pure io
 
 getComments
   :: FirstAppDB
   -> Topic
   -> AppM [Comment]
-getComments =
-  error "Copy your completed 'getComments' and refactor to match the new type signature"
-
+getComments app topic = 
+  let
+    conn       = dbConn app
+    query      = "SELECT id, topic, comment, time FROM comments WHERE topic = ?"
+    retrieval  = Sql.query conn query [getTopic topic]
+  in do
+    runDB (\cs -> sequence $ fromDBComment <$> cs) retrieval
+  
 addCommentToTopic
   :: FirstAppDB
   -> Topic
   -> CommentText
   -> AppM ()
-addCommentToTopic =
-  error "Copy your completed 'appCommentToTopic' and refactor to match the new type signature"
+addCommentToTopic app topic text =
+  let
+    conn   = dbConn app 
+    query  = "INSERT INTO comments (topic, comment, time) VALUES (?, ?, ?)"
+    topic' = getTopic topic
+    text'  = getCommentText text
+
+    insertion = getCurrentTime >>= (\t -> Sql.execute conn query (topic', text', t))
+  in do
+    runDB pure insertion
 
 getTopics
   :: FirstAppDB
   -> AppM [Topic]
-getTopics =
-  error "Copy your completed 'getTopics' and refactor to match the new type signature"
+getTopics app =
+  let
+    conn      = dbConn app
+    query     = "SELECT DISTINCT topic FROM comments"
+    retrieval = Sql.query_ conn query
+  in do
+    runDB (\ts -> sequence $ fromDBTopic <$> ts) retrieval
 
 deleteTopic
   :: FirstAppDB
   -> Topic
   -> AppM ()
-deleteTopic =
-  error "Copy your completed 'deleteTopic' and refactor to match the new type signature"
-
+deleteTopic app topic = 
+  let
+    conn    = dbConn app
+    topic'  = getTopic topic
+    query   = "DELETE FROM comments WHERE topic = ?"
+    removal = Sql.execute conn query [topic']
+  in do
+    runDB pure removal
 -- Go to 'src/Level05/Core.hs' next.

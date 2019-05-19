@@ -15,6 +15,7 @@ module Level05.Types
   , getCommentText
   , renderContentType
   , fromDBComment
+  , fromDBTopic
   , encodeComment
   , encodeTopic
   ) where
@@ -27,9 +28,8 @@ import           Data.Text                          (Text, pack)
 
 import           System.IO.Error                    (IOError)
 
-import           Data.Functor.Contravariant         ((>$<))
-import           Data.Monoid                        (Last,
-                                                     Monoid (mappend, mempty))
+import           Data.Functor.Contravariant         ((>$<)) 
+import           Data.Monoid                        (Last, Monoid (mappend, mempty)) 
 import           Data.Semigroup                     (Semigroup ((<>)))
 
 import           Data.List                          (stripPrefix)
@@ -42,7 +42,7 @@ import           Database.SQLite.SimpleErrors.Types (SQLiteResponse)
 import           Waargonaut.Encode                  (Encoder)
 import qualified Waargonaut.Encode                  as E
 
-import           Level05.DB.Types                   (DBComment (dbCommentComment, dbCommentId, dbCommentTime, dbCommentTopic))
+import           Level05.DB.Types                   as DB
 
 import           Level05.Types.CommentText          (CommentText,
                                                      encodeCommentText,
@@ -85,13 +85,18 @@ encodeComment = E.mapLikeObj $ \c ->
 -- providing greater guarantees about data cleanliness.
 
 fromDBComment
-  :: DBComment
+  :: DB.DBComment
   -> Either Error Comment
 fromDBComment dbc =
-  Comment (CommentId     $ dbCommentId dbc)
-      <$> (mkTopic       $ dbCommentTopic dbc)
-      <*> (mkCommentText $ dbCommentComment dbc)
-      <*> (pure          $ dbCommentTime dbc)
+  Comment (CommentId     $ DB.dbCommentId dbc)
+      <$> (mkTopic       $ DB.dbCommentTopic dbc)
+      <*> (mkCommentText $ DB.dbCommentComment dbc)
+      <*> (pure          $ DB.dbCommentTime dbc)
+
+fromDBTopic
+  :: DB.DBTopic
+  -> Either Error Topic
+fromDBTopic (DB.DBTopic t) = mkTopic t
 
 -- We have to be able to:
 -- - Comment on a given topic
